@@ -106,7 +106,6 @@
       }
 
       function receiveMessage(event) {
-        if (event.source !== iframe.contentWindow) return;
         const data = event.data;
         if (
           !data ||
