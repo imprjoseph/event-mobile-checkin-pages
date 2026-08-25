@@ -139,7 +139,18 @@
     if (action === "config") {
       return jsonp(event.apiUrl, { action, ...params });
     }
-    return frameApi(event.apiUrl, { action, ...params });
+    const url = new URL(event.apiUrl);
+    Object.entries({ action, ...params, t: Date.now() }).forEach(
+      ([key, value]) => url.searchParams.set(key, String(value)),
+    );
+    return fetch(url.toString(), {
+      cache: "no-store",
+      mode: "cors",
+      redirect: "follow",
+    }).then((response) => {
+      if (!response.ok) throw new Error(`後台回應錯誤（${response.status}）`);
+      return response.json();
+    });
   }
 
   function footer() {
