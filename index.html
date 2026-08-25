@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#082f3c" />
+    <meta
+      name="description"
+      content="iMPR 活動行動報到：手機掃描 QR Code、姓名查詢與手動序號報到。"
+    />
+    <title>活動行動報到</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app" class="page-shell" aria-live="polite">
+      <section class="checkin-card loading-card">
+        <img class="brand-logo" src="./impr-logo.png" alt="iMPR" />
+        <div class="loading-dot" aria-hidden="true"></div>
+        <h1>正在載入活動設定</h1>
+        <p class="message">請稍候。</p>
+      </section>
+    </main>
+    <script src="./vendor/zxing-browser.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
