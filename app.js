@@ -86,9 +86,61 @@
     });
   }
 
+  function frameApi(apiUrl, parameters) {
+    return new Promise((resolve, reject) => {
+      const requestId = `imprFrame_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const iframe = document.createElement("iframe");
+      iframe.hidden = true;
+      iframe.setAttribute("aria-hidden", "true");
+      iframe.title = "活動後台連線";
+
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("後台回應逾時"));
+      }, 20000);
+
+      function cleanup() {
+        window.clearTimeout(timeout);
+        window.removeEventListener("message", receiveMessage);
+        iframe.remove();
+      }
+
+      function receiveMessage(event) {
+        if (event.source !== iframe.contentWindow) return;
+        const data = event.data;
+        if (
+          !data ||
+          data.source !== "impr-checkin-api" ||
+          data.requestId !== requestId
+        ) return;
+        cleanup();
+        resolve(data.payload || {});
+      }
+
+      window.addEventListener("message", receiveMessage);
+      iframe.onerror = () => {
+        cleanup();
+        reject(new Error("無法連線至活動後台"));
+      };
+
+      const url = new URL(apiUrl);
+      Object.entries({
+        ...parameters,
+        transport: "frame",
+        requestId,
+        t: Date.now(),
+      }).forEach(([key, value]) => url.searchParams.set(key, String(value)));
+      iframe.src = url.toString();
+      document.body.appendChild(iframe);
+    });
+  }
+
   function callApi(action, params = {}, eventKey = state.eventKey) {
     const event = EVENTS[eventKey] || EVENTS.sig206;
-    return jsonp(event.apiUrl, { action, ...params });
+    if (action === "config") {
+      return jsonp(event.apiUrl, { action, ...params });
+    }
+    return frameApi(event.apiUrl, { action, ...params });
   }
 
   function footer() {
