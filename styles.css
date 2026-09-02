@@ -285,12 +285,14 @@ button:disabled { opacity: 0.58; cursor: wait; }
 .lookup-results { display: grid; gap: 10px; margin-top: 14px; }
 .lookup-summary { color: var(--muted); font-size: 14px; font-weight: 700; }
 .lookup-card { display: flex; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: white; }
+.lookup-card.is-queued { border-color: #12b76a; background: #f0fdf4; }
 .lookup-person { display: grid; gap: 3px; min-width: 0; }
 .lookup-person strong { font-size: 17px; }
 .lookup-person span { color: var(--muted); font-size: 13px; }
 .lookup-person code { color: #0f766e; }
 .lookup-action { display: grid; align-content: center; gap: 7px; text-align: right; }
 .lookup-action button { padding: 8px 10px; border: 0; border-radius: 9px; background: #e6f7f4; color: #08776e; font-weight: 800; cursor: pointer; }
+.lookup-action button:disabled { opacity: 1; background: #12b76a; color: white; cursor: default; }
 .status-badge { color: #475467; font-size: 12px; font-weight: 800; }
 
 .error-text { margin: 12px 0 0; color: var(--danger); font-weight: 700; line-height: 1.55; }

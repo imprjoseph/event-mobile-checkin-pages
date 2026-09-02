@@ -543,7 +543,19 @@
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "使用此序號";
-    button.addEventListener("click", () => recordById(row.id));
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      button.textContent = "已加入 ✓";
+      badge.textContent = "等待同步";
+      card.classList.add("is-queued");
+      recordById(row.id);
+
+      window.setTimeout(() => {
+        if (!button.isConnected) return;
+        button.disabled = false;
+        button.textContent = "使用此序號";
+      }, 1500);
+    });
     action.append(badge, button);
 
     card.append(person, action);
