@@ -468,7 +468,7 @@
       overlay.className = `result-overlay${kind === "error" ? " is-error" : kind === "duplicate" ? " is-duplicate" : ""}`;
       document.getElementById("overlay-title").textContent = title;
       document.getElementById("overlay-message").textContent = message;
-      document.getElementById("overlay-id").textContent = id;
+      document.getElementById("overlay-id").textContent = `報到序號：${id}`;
     }
   }
 

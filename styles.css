@@ -264,7 +264,7 @@ button:disabled { opacity: 0.58; cursor: wait; }
   text-align: left;
 }
 .result-overlay strong { font-size: 18px; }
-.result-overlay code { color: #a7f3d0; }
+.result-overlay code { color: #a7f3d0; font-size: 16px; font-weight: 800; }
 .result-overlay.is-error { background: rgba(127, 29, 29, 0.95); }
 .result-overlay.is-duplicate { background: rgba(120, 53, 15, 0.95); }
 
