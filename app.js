@@ -3,6 +3,9 @@
 
   const API_URL =
     "https://script.google.com/macros/s/AKfycbwdcYn-IrU3eH91Og7zNB27SdPuqoagb1CujNl7YjyO_54hFycGUvU7lRAPf8dVeDarjA/exec";
+  const QUEUE_STORAGE_KEY = "impr-checkin-pending-v1";
+  const BATCH_SIZE = 10;
+  const BATCH_DELAY_MS = 900;
 
   const EVENTS = {
     sig206: {
@@ -26,6 +29,11 @@
     handled: false,
     lastScannedId: "",
     lastScannedAt: 0,
+    pendingQueue: [],
+    queueTimer: 0,
+    syncingQueue: false,
+    retryDelay: 2000,
+    lastQueuedClientId: "",
   };
 
   function escapeHtml(value) {
@@ -311,6 +319,126 @@
     return /^[A-Za-z0-9_-]{1,80}$/.test(String(value || "").trim());
   }
 
+  function loadPendingQueue() {
+    try {
+      const value = JSON.parse(window.localStorage.getItem(QUEUE_STORAGE_KEY) || "[]");
+      if (!Array.isArray(value)) return [];
+      return value.filter(
+        (item) =>
+          item &&
+          validId(item.id) &&
+          ["checkin", "gift", "lunch"].includes(item.mode) &&
+          item.clientId,
+      );
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function savePendingQueue() {
+    try {
+      window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(state.pendingQueue));
+    } catch (_) {}
+  }
+
+  function scheduleQueueSync(delay = BATCH_DELAY_MS) {
+    if (!state.pendingQueue.length || state.syncingQueue) return;
+    window.clearTimeout(state.queueTimer);
+    state.queueTimer = window.setTimeout(flushPendingQueue, delay);
+  }
+
+  function enqueueRecord(id, includeOverlay) {
+    const mode = state.mode;
+    const existing = state.pendingQueue.find((item) => item.id === id && item.mode === mode);
+    if (existing) {
+      state.lastQueuedClientId = existing.clientId;
+      showResult(
+        {
+          success: true,
+          title: "已在等待同步",
+          message: `${id} 已經在暫存佇列中，目前共有 ${state.pendingQueue.length} 筆等待同步。`,
+        },
+        id,
+        includeOverlay,
+      );
+      scheduleQueueSync(0);
+      return;
+    }
+
+    const item = {
+      clientId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id,
+      mode,
+      eventKey: state.eventKey,
+      includeOverlay: Boolean(includeOverlay),
+      queuedAt: Date.now(),
+    };
+    state.pendingQueue.push(item);
+    state.lastQueuedClientId = item.clientId;
+    savePendingQueue();
+    showResult(
+      {
+        success: true,
+        title: "已暫存・等待同步",
+        message: `${id} 已存入本機；可立即處理下一位。目前 ${state.pendingQueue.length} 筆等待同步。`,
+      },
+      id,
+      includeOverlay,
+    );
+    scheduleQueueSync(state.pendingQueue.length >= 5 ? 0 : BATCH_DELAY_MS);
+  }
+
+  async function flushPendingQueue() {
+    if (state.syncingQueue || !state.pendingQueue.length || !navigator.onLine) return;
+    state.syncingQueue = true;
+    window.clearTimeout(state.queueTimer);
+    state.queueTimer = 0;
+    const batch = state.pendingQueue.slice(0, BATCH_SIZE);
+    let syncSucceeded = false;
+
+    try {
+      const payload = await callApi("batchRecord", {
+        items: JSON.stringify(
+          batch.map(({ clientId, id, mode }) => ({ clientId, id, mode })),
+        ),
+      });
+      if (!payload.success || !Array.isArray(payload.results)) {
+        throw new Error(payload.message || "批次同步失敗");
+      }
+
+      const completed = new Set(payload.results.map((result) => result.clientId));
+      state.pendingQueue = state.pendingQueue.filter((item) => !completed.has(item.clientId));
+      savePendingQueue();
+      state.retryDelay = 2000;
+      syncSucceeded = true;
+
+      const currentResult =
+        payload.results.find((result) => result.clientId === state.lastQueuedClientId) ||
+        payload.results[payload.results.length - 1];
+      if (currentResult) {
+        const queuedItem = batch.find((item) => item.clientId === currentResult.clientId);
+        showResult(currentResult, currentResult.id, Boolean(queuedItem && queuedItem.includeOverlay));
+      }
+    } catch (error) {
+      const latest = state.pendingQueue[state.pendingQueue.length - 1];
+      if (latest) {
+        showResult(
+          {
+            success: true,
+            title: "已暫存・等待網路同步",
+            message: `資料仍安全保留在手機，系統將自動重試。目前 ${state.pendingQueue.length} 筆等待同步。`,
+          },
+          latest.id,
+          Boolean(latest.includeOverlay),
+        );
+      }
+      state.retryDelay = Math.min(state.retryDelay * 2, 30000);
+    } finally {
+      state.syncingQueue = false;
+      if (state.pendingQueue.length) scheduleQueueSync(syncSucceeded ? 0 : state.retryDelay);
+    }
+  }
+
   function setError(message) {
     const element = document.getElementById("scanner-error");
     if (!element) return;
@@ -344,7 +472,7 @@
     }
   }
 
-  async function recordById(rawId, includeOverlay = false) {
+  function recordById(rawId, includeOverlay = false) {
     const id = String(rawId || "").trim();
     if (!validId(id)) {
       setError("請輸入正確的報到序號，例如 SPK-001。");
@@ -352,26 +480,7 @@
     }
 
     setError("");
-    if (includeOverlay) {
-      showResult(
-        { success: true, title: "正在登記…", message: "完成後可直接掃描下一位。" },
-        id,
-        true,
-      );
-    }
-
-    try {
-      const payload = await callApi("record", { id, mode: state.mode });
-      showResult(payload, id, includeOverlay);
-    } catch (error) {
-      const payload = {
-        success: false,
-        title: "暫時無法登記",
-        message: error && error.message ? error.message : "請稍後再試一次。",
-      };
-      showResult(payload, id, includeOverlay);
-      state.lastScannedId = "";
-    }
+    enqueueRecord(id, includeOverlay);
   }
 
   async function lookupAttendees(event) {
@@ -559,6 +668,11 @@
   }
 
   async function initialize() {
+    state.pendingQueue = loadPendingQueue();
+    const restoredPendingQueue = state.pendingQueue.length > 0;
+    if (state.pendingQueue.length) {
+      state.lastQueuedClientId = state.pendingQueue[state.pendingQueue.length - 1].clientId;
+    }
     const params = new URLSearchParams(window.location.search);
     const config = await loadConfig();
     EVENTS.sig206.name = config.eventName;
@@ -582,11 +696,20 @@
     }
 
     const id = String(params.get("id") || "").trim();
-    if (id) await recordById(id);
+    if (id) recordById(id);
+    if (restoredPendingQueue) scheduleQueueSync(0);
   }
+
+  window.addEventListener("online", () => scheduleQueueSync(0));
+  window.setInterval(() => {
+    if (state.pendingQueue.length && !state.queueTimer && !state.syncingQueue) {
+      scheduleQueueSync(0);
+    }
+  }, 5000);
 
   window.addEventListener("beforeunload", () => {
     if (state.scannerControls) state.scannerControls.stop();
+    savePendingQueue();
   });
 
   initialize();
