@@ -36,8 +36,9 @@
     lastQueuedClientId: "",
     dashboardPin: "",
     dashboardRows: [],
-    dashboardFilter: "all",
+    dashboardFilter: "attended",
     dashboardQuery: "",
+    selectedBadgeIds: new Set(),
   };
 
   function escapeHtml(value) {
@@ -325,10 +326,10 @@
 
         <section id="dashboard-content" class="dashboard-content hidden">
           <div class="dashboard-stats" aria-label="出席統計">
-            <article><span>應到人數</span><strong id="stat-total">0</strong></article>
             <article><span>已報到</span><strong id="stat-attended">0</strong></article>
-            <article><span>出席率</span><strong id="stat-rate">0%</strong></article>
-            <article><span>識別證已領</span><strong id="stat-badge">0</strong></article>
+            <article><span>未報到</span><strong id="stat-not-attended">0</strong></article>
+            <article><span>午餐已領</span><strong id="stat-lunch">0</strong></article>
+            <article><span>伴手禮已領</span><strong id="stat-gift">0</strong></article>
           </div>
 
           <div class="dashboard-controls">
@@ -340,11 +341,21 @@
           </div>
 
           <div class="dashboard-filters" aria-label="清單篩選">
-            <button class="is-selected" type="button" data-filter="all">全部</button>
-            <button type="button" data-filter="attended">已報到</button>
-            <button type="button" data-filter="not-attended">未報到</button>
-            <button type="button" data-filter="badge">識別證已領</button>
-            <button type="button" data-filter="no-badge">尚未領取</button>
+            <button class="is-selected" type="button" data-filter="attended">報到</button>
+            <button type="button" data-filter="not-attended">沒報到</button>
+            <button type="button" data-filter="lunch">已領午餐</button>
+            <button type="button" data-filter="gift">已領伴手禮</button>
+          </div>
+
+          <div class="dashboard-batch-bar">
+            <div>
+              <strong id="dashboard-selected-count">尚未選取</strong>
+              <span id="dashboard-badge-total">點選人員加入識別證批次</span>
+            </div>
+            <div class="dashboard-batch-actions">
+              <button id="dashboard-clear-selection" type="button" disabled>取消選取</button>
+              <button id="dashboard-submit-batch" type="button" disabled>OK 批次寫入</button>
+            </div>
           </div>
 
           <div class="dashboard-list-meta">
@@ -368,6 +379,11 @@
     document.getElementById("dashboard-refresh").addEventListener("click", () => {
       loadDashboard(state.dashboardPin, true);
     });
+    document.getElementById("dashboard-clear-selection").addEventListener("click", () => {
+      state.selectedBadgeIds.clear();
+      renderDashboardList();
+    });
+    document.getElementById("dashboard-submit-batch").addEventListener("click", submitBadgeBatch);
     document.querySelectorAll("[data-filter]").forEach((button) => {
       button.addEventListener("click", () => {
         state.dashboardFilter = button.dataset.filter;
@@ -397,6 +413,7 @@
       }
       state.dashboardPin = normalizedPin;
       state.dashboardRows = payload.results;
+      state.selectedBadgeIds.clear();
       document.getElementById("dashboard-login").classList.add("hidden");
       document.getElementById("dashboard-content").classList.remove("hidden");
       document.getElementById("dashboard-updated-at").textContent = payload.updatedAt
@@ -421,12 +438,14 @@
   function renderDashboardStats() {
     const total = state.dashboardRows.length;
     const attended = state.dashboardRows.filter((row) => row.attended === "是").length;
+    const lunchReceived = state.dashboardRows.filter((row) => row.lunchReceived === "是").length;
+    const giftReceived = state.dashboardRows.filter((row) => row.giftReceived === "是").length;
     const badgeReceived = state.dashboardRows.filter((row) => row.badgeReceived === "是").length;
-    const rate = total ? Math.round((attended / total) * 100) : 0;
-    document.getElementById("stat-total").textContent = total;
     document.getElementById("stat-attended").textContent = attended;
-    document.getElementById("stat-rate").textContent = `${rate}%`;
-    document.getElementById("stat-badge").textContent = badgeReceived;
+    document.getElementById("stat-not-attended").textContent = Math.max(0, total - attended);
+    document.getElementById("stat-lunch").textContent = lunchReceived;
+    document.getElementById("stat-gift").textContent = giftReceived;
+    document.getElementById("dashboard-badge-total").textContent = `識別證已領 ${badgeReceived} 人`;
   }
 
   function renderDashboardList() {
@@ -434,13 +453,11 @@
     if (!list) return;
     const rows = state.dashboardRows.filter((row) => {
       const attended = row.attended === "是";
-      const badgeReceived = row.badgeReceived === "是";
       const filterMatches =
-        state.dashboardFilter === "all" ||
         (state.dashboardFilter === "attended" && attended) ||
         (state.dashboardFilter === "not-attended" && !attended) ||
-        (state.dashboardFilter === "badge" && badgeReceived) ||
-        (state.dashboardFilter === "no-badge" && !badgeReceived);
+        (state.dashboardFilter === "lunch" && row.lunchReceived === "是") ||
+        (state.dashboardFilter === "gift" && row.giftReceived === "是");
       const haystack = [row.id, row.name, row.company, row.title]
         .join("\n")
         .toLowerCase();
@@ -448,6 +465,7 @@
     });
 
     document.getElementById("dashboard-count").textContent = `${rows.length} 筆`;
+    renderBatchControls();
     if (!rows.length) {
       list.innerHTML = '<div class="dashboard-empty">目前沒有符合條件的資料。</div>';
       return;
@@ -456,8 +474,9 @@
     list.innerHTML = rows.map((row) => {
       const attended = row.attended === "是";
       const badgeReceived = row.badgeReceived === "是";
+      const selected = state.selectedBadgeIds.has(row.id);
       return `
-        <article class="dashboard-row${badgeReceived ? " has-badge" : ""}">
+        <article class="dashboard-row${badgeReceived ? " has-badge" : ""}${selected ? " is-selected" : ""}">
           <div class="dashboard-person">
             <div class="dashboard-person-title">
               <strong>${escapeHtml(row.name || "未填姓名")}</strong>
@@ -470,9 +489,13 @@
             <span class="attendance-pill ${attended ? "is-attended" : "is-absent"}">
               ${attended ? `已報到${row.checkinAt ? ` · ${escapeHtml(row.checkinAt)}` : ""}` : "未報到"}
             </span>
-            <button class="badge-button${badgeReceived ? " is-received" : ""}" type="button"
+            <div class="dashboard-receipts">
+              ${row.lunchReceived === "是" ? "<span>午餐已領</span>" : ""}
+              ${row.giftReceived === "是" ? "<span>伴手禮已領</span>" : ""}
+            </div>
+            <button class="badge-button${badgeReceived ? " is-received" : ""}${selected ? " is-pending" : ""}" type="button"
               data-badge-id="${escapeHtml(row.id || "")}" ${badgeReceived ? "disabled" : ""}>
-              ${badgeReceived ? "✓ 識別證已領" : "標註識別證已領"}
+              ${badgeReceived ? "✓ 識別證已領" : selected ? "✓ 已加入批次" : "加入識別證批次"}
             </button>
             ${badgeReceived && row.badgeReceivedAt ? `<small>領取時間 ${escapeHtml(row.badgeReceivedAt)}</small>` : ""}
           </div>
@@ -480,29 +503,57 @@
     }).join("");
 
     list.querySelectorAll("[data-badge-id]:not(:disabled)").forEach((button) => {
-      button.addEventListener("click", () => markBadgeReceived(button.dataset.badgeId, button));
+      button.addEventListener("click", () => toggleBadgeSelection(button.dataset.badgeId));
     });
   }
 
-  async function markBadgeReceived(id, button) {
-    button.disabled = true;
-    button.textContent = "登記中…";
+  function toggleBadgeSelection(id) {
+    if (state.selectedBadgeIds.has(id)) state.selectedBadgeIds.delete(id);
+    else state.selectedBadgeIds.add(id);
+    renderDashboardList();
+  }
+
+  function renderBatchControls() {
+    const count = state.selectedBadgeIds.size;
+    const countElement = document.getElementById("dashboard-selected-count");
+    const clearButton = document.getElementById("dashboard-clear-selection");
+    const submitButton = document.getElementById("dashboard-submit-batch");
+    if (!countElement || !clearButton || !submitButton) return;
+    countElement.textContent = count ? `已選取 ${count} 人，尚未寫入` : "尚未選取";
+    clearButton.disabled = count === 0;
+    submitButton.disabled = count === 0;
+  }
+
+  async function submitBadgeBatch() {
+    const ids = Array.from(state.selectedBadgeIds);
+    if (!ids.length) return;
+    const submitButton = document.getElementById("dashboard-submit-batch");
+    const clearButton = document.getElementById("dashboard-clear-selection");
+    submitButton.disabled = true;
+    clearButton.disabled = true;
+    submitButton.textContent = "批次寫入中…";
     setDashboardMessage("");
     try {
-      const payload = await callApi("dashboardRecord", { id, pin: state.dashboardPin });
-      if (!payload.success) throw new Error(payload.message || "識別證登記失敗");
-      const row = state.dashboardRows.find((item) => item.id === id);
-      if (row) {
+      const payload = await callApi("dashboardBatchRecord", {
+        ids: JSON.stringify(ids),
+        pin: state.dashboardPin,
+      });
+      if (!payload.success) throw new Error(payload.message || "批次寫入失敗");
+      const completed = new Set([...(payload.updatedIds || []), ...(payload.alreadyIds || [])]);
+      state.dashboardRows.forEach((row) => {
+        if (!completed.has(row.id)) return;
         row.badgeReceived = "是";
-        row.badgeReceivedAt = payload.badgeReceivedAt || row.badgeReceivedAt || "";
-      }
+        if (!row.badgeReceivedAt) row.badgeReceivedAt = payload.badgeReceivedAt || "";
+      });
+      state.selectedBadgeIds.clear();
       renderDashboardStats();
       renderDashboardList();
-      setDashboardMessage(payload.message || `${id} 已標註識別證領取。`, false);
+      setDashboardMessage(payload.message || `已批次寫入 ${completed.size} 人。`, false);
     } catch (requestError) {
-      button.disabled = false;
-      button.textContent = "標註識別證已領";
-      setDashboardMessage(requestError.message || "登記失敗，請稍後再試。", true);
+      renderBatchControls();
+      setDashboardMessage(requestError.message || "批次寫入失敗，請稍後再試。", true);
+    } finally {
+      submitButton.textContent = "OK 批次寫入";
     }
   }
 

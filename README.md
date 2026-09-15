@@ -6,6 +6,7 @@
 - 正式資料由 Google Apps Script 與 Google Sheet 管理
 - 支援連續掃描、姓名／公司查詢、手動序號、伴手禮與午餐登記
 - 工作人員可用管理 PIN 開啟現場清單、出席統計與識別證領取登記
+- 識別證採多人選取後按「OK 批次寫入」，清單只保留報到、沒報到、已領午餐、已領伴手禮四種篩選
 
 正式網址：<https://imprjoseph.github.io/event-mobile-checkin-pages/?event=sig206>
 
