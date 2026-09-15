@@ -2,7 +2,7 @@
   "use strict";
 
   const API_URL =
-    "https://script.google.com/macros/s/AKfycbwdcYn-IrU3eH91Og7zNB27SdPuqoagb1CujNl7YjyO_54hFycGUvU7lRAPf8dVeDarjA/exec";
+    "https://script.google.com/macros/s/AKfycbxD4YVp1TUW6uZmbZHgsp6XJiKWUOk7k-BqwzHMYiYeFu3CbFcYWnDD9y-5w1Go7xOSsA/exec";
   const QUEUE_STORAGE_KEY = "impr-checkin-pending-v1";
   const BATCH_SIZE = 10;
   const BATCH_DELAY_MS = 900;
@@ -34,6 +34,10 @@
     syncingQueue: false,
     retryDelay: 2000,
     lastQueuedClientId: "",
+    dashboardPin: "",
+    dashboardRows: [],
+    dashboardFilter: "all",
+    dashboardQuery: "",
   };
 
   function escapeHtml(value) {
@@ -206,6 +210,10 @@
         <h1>請選擇會議</h1>
         <p class="message">選擇後可掃描 QR Code、查詢姓名／公司或手動輸入序號。</p>
         <div class="event-list">${cards}</div>
+        <a class="staff-entry" href="${escapeHtml(pageUrl({ event: "sig206", view: "dashboard" }))}">
+          <span>工作人員專用</span>
+          <strong>查看現場清單與出席統計</strong>
+        </a>
       </section>
       ${footer()}`;
   }
@@ -218,7 +226,10 @@
       <section class="checkin-card">
         <img class="brand-logo" src="./impr-logo.png" alt="iMPR 新加坡公眾關係顧問服務有限公司" />
         <div class="eyebrow"><span class="signal-dot"></span>手機快速報到</div>
-        <a class="change-event" href="${escapeHtml(pageUrl({}))}">切換會議</a>
+        <div class="page-links">
+          <a class="change-event" href="${escapeHtml(pageUrl({}))}">切換會議</a>
+          <a class="change-event" href="${escapeHtml(pageUrl({ event: eventKey, view: "dashboard" }))}">現場清單</a>
+        </div>
         <h1>${escapeHtml(eventName)}</h1>
         <p class="message">可搜尋姓名或公司、手動輸入序號，或使用手機相機掃描 QR Code。</p>
 
@@ -279,6 +290,227 @@
       ${footer()}`;
 
     bindEventPage();
+  }
+
+  function renderDashboardPage(eventKey, eventName) {
+    state.eventKey = eventKey;
+    state.eventName = eventName;
+    app.classList.add("dashboard-page");
+    app.innerHTML = `
+      <section class="dashboard-card">
+        <header class="dashboard-header">
+          <div class="dashboard-brand">
+            <img class="dashboard-logo" src="./impr-logo.png" alt="iMPR 新加坡公眾關係顧問服務有限公司" />
+            <div>
+              <div class="eyebrow"><span class="signal-dot"></span>現場人員快速管理</div>
+              <h1>${escapeHtml(eventName)}</h1>
+            </div>
+          </div>
+          <a class="dashboard-back" href="${escapeHtml(pageUrl({ event: eventKey }))}">返回報到</a>
+        </header>
+
+        <section id="dashboard-login" class="dashboard-login">
+          <div class="dashboard-login-icon" aria-hidden="true">✓</div>
+          <h2>開啟現場清單</h2>
+          <p>請輸入活動設定中的「現場管理 PIN」。</p>
+          <form id="dashboard-login-form" class="dashboard-login-form">
+            <label for="dashboard-pin">管理 PIN</label>
+            <div class="input-row">
+              <input id="dashboard-pin" type="password" inputmode="numeric" maxlength="12" autocomplete="off" required />
+              <button id="dashboard-login-button" class="small-button" type="submit">開啟清單</button>
+            </div>
+          </form>
+          <p id="dashboard-login-error" class="error-text hidden" role="alert"></p>
+        </section>
+
+        <section id="dashboard-content" class="dashboard-content hidden">
+          <div class="dashboard-stats" aria-label="出席統計">
+            <article><span>應到人數</span><strong id="stat-total">0</strong></article>
+            <article><span>已報到</span><strong id="stat-attended">0</strong></article>
+            <article><span>出席率</span><strong id="stat-rate">0%</strong></article>
+            <article><span>識別證已領</span><strong id="stat-badge">0</strong></article>
+          </div>
+
+          <div class="dashboard-controls">
+            <label class="dashboard-search" for="dashboard-search">
+              <span>搜尋姓名、公司或序號</span>
+              <input id="dashboard-search" type="search" placeholder="輸入任一文字" autocomplete="off" />
+            </label>
+            <button id="dashboard-refresh" class="refresh-button" type="button">重新整理</button>
+          </div>
+
+          <div class="dashboard-filters" aria-label="清單篩選">
+            <button class="is-selected" type="button" data-filter="all">全部</button>
+            <button type="button" data-filter="attended">已報到</button>
+            <button type="button" data-filter="not-attended">未報到</button>
+            <button type="button" data-filter="badge">識別證已領</button>
+            <button type="button" data-filter="no-badge">尚未領取</button>
+          </div>
+
+          <div class="dashboard-list-meta">
+            <strong id="dashboard-count">0 筆</strong>
+            <span id="dashboard-updated-at"></span>
+          </div>
+          <p id="dashboard-message" class="dashboard-message hidden" role="status"></p>
+          <div id="dashboard-list" class="dashboard-list"></div>
+        </section>
+      </section>
+      ${footer()}`;
+
+    document.getElementById("dashboard-login-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      loadDashboard(document.getElementById("dashboard-pin").value);
+    });
+    document.getElementById("dashboard-search").addEventListener("input", (event) => {
+      state.dashboardQuery = event.target.value.trim().toLowerCase();
+      renderDashboardList();
+    });
+    document.getElementById("dashboard-refresh").addEventListener("click", () => {
+      loadDashboard(state.dashboardPin, true);
+    });
+    document.querySelectorAll("[data-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.dashboardFilter = button.dataset.filter;
+        document.querySelectorAll("[data-filter]").forEach((item) => {
+          item.classList.toggle("is-selected", item === button);
+        });
+        renderDashboardList();
+      });
+    });
+  }
+
+  async function loadDashboard(pin, refreshing = false) {
+    const normalizedPin = String(pin || "").trim();
+    const loginButton = document.getElementById("dashboard-login-button");
+    const refreshButton = document.getElementById("dashboard-refresh");
+    const error = document.getElementById("dashboard-login-error");
+    const activeButton = refreshing ? refreshButton : loginButton;
+    if (!normalizedPin) return;
+
+    activeButton.disabled = true;
+    activeButton.textContent = refreshing ? "更新中…" : "讀取中…";
+    error.classList.add("hidden");
+    try {
+      const payload = await callApi("dashboard", { pin: normalizedPin });
+      if (!payload.success || !Array.isArray(payload.results)) {
+        throw new Error(payload.message || "無法讀取現場清單");
+      }
+      state.dashboardPin = normalizedPin;
+      state.dashboardRows = payload.results;
+      document.getElementById("dashboard-login").classList.add("hidden");
+      document.getElementById("dashboard-content").classList.remove("hidden");
+      document.getElementById("dashboard-updated-at").textContent = payload.updatedAt
+        ? `更新：${payload.updatedAt}`
+        : "";
+      renderDashboardStats();
+      renderDashboardList();
+      if (refreshing) setDashboardMessage("清單已更新。", false);
+    } catch (requestError) {
+      if (refreshing) {
+        setDashboardMessage(requestError.message || "更新失敗，請稍後再試。", true);
+      } else {
+        error.textContent = requestError.message || "PIN 不正確或後台暫時無法連線。";
+        error.classList.remove("hidden");
+      }
+    } finally {
+      activeButton.disabled = false;
+      activeButton.textContent = refreshing ? "重新整理" : "開啟清單";
+    }
+  }
+
+  function renderDashboardStats() {
+    const total = state.dashboardRows.length;
+    const attended = state.dashboardRows.filter((row) => row.attended === "是").length;
+    const badgeReceived = state.dashboardRows.filter((row) => row.badgeReceived === "是").length;
+    const rate = total ? Math.round((attended / total) * 100) : 0;
+    document.getElementById("stat-total").textContent = total;
+    document.getElementById("stat-attended").textContent = attended;
+    document.getElementById("stat-rate").textContent = `${rate}%`;
+    document.getElementById("stat-badge").textContent = badgeReceived;
+  }
+
+  function renderDashboardList() {
+    const list = document.getElementById("dashboard-list");
+    if (!list) return;
+    const rows = state.dashboardRows.filter((row) => {
+      const attended = row.attended === "是";
+      const badgeReceived = row.badgeReceived === "是";
+      const filterMatches =
+        state.dashboardFilter === "all" ||
+        (state.dashboardFilter === "attended" && attended) ||
+        (state.dashboardFilter === "not-attended" && !attended) ||
+        (state.dashboardFilter === "badge" && badgeReceived) ||
+        (state.dashboardFilter === "no-badge" && !badgeReceived);
+      const haystack = [row.id, row.name, row.company, row.title]
+        .join("\n")
+        .toLowerCase();
+      return filterMatches && (!state.dashboardQuery || haystack.includes(state.dashboardQuery));
+    });
+
+    document.getElementById("dashboard-count").textContent = `${rows.length} 筆`;
+    if (!rows.length) {
+      list.innerHTML = '<div class="dashboard-empty">目前沒有符合條件的資料。</div>';
+      return;
+    }
+
+    list.innerHTML = rows.map((row) => {
+      const attended = row.attended === "是";
+      const badgeReceived = row.badgeReceived === "是";
+      return `
+        <article class="dashboard-row${badgeReceived ? " has-badge" : ""}">
+          <div class="dashboard-person">
+            <div class="dashboard-person-title">
+              <strong>${escapeHtml(row.name || "未填姓名")}</strong>
+              <code>${escapeHtml(row.id || "")}</code>
+            </div>
+            <span>${escapeHtml([row.company, row.title].filter(Boolean).join(" · "))}</span>
+            <small>${escapeHtml(row.attendeeType || "一般與會者")}</small>
+          </div>
+          <div class="dashboard-statuses">
+            <span class="attendance-pill ${attended ? "is-attended" : "is-absent"}">
+              ${attended ? `已報到${row.checkinAt ? ` · ${escapeHtml(row.checkinAt)}` : ""}` : "未報到"}
+            </span>
+            <button class="badge-button${badgeReceived ? " is-received" : ""}" type="button"
+              data-badge-id="${escapeHtml(row.id || "")}" ${badgeReceived ? "disabled" : ""}>
+              ${badgeReceived ? "✓ 識別證已領" : "標註識別證已領"}
+            </button>
+            ${badgeReceived && row.badgeReceivedAt ? `<small>領取時間 ${escapeHtml(row.badgeReceivedAt)}</small>` : ""}
+          </div>
+        </article>`;
+    }).join("");
+
+    list.querySelectorAll("[data-badge-id]:not(:disabled)").forEach((button) => {
+      button.addEventListener("click", () => markBadgeReceived(button.dataset.badgeId, button));
+    });
+  }
+
+  async function markBadgeReceived(id, button) {
+    button.disabled = true;
+    button.textContent = "登記中…";
+    setDashboardMessage("");
+    try {
+      const payload = await callApi("dashboardRecord", { id, pin: state.dashboardPin });
+      if (!payload.success) throw new Error(payload.message || "識別證登記失敗");
+      const row = state.dashboardRows.find((item) => item.id === id);
+      if (row) {
+        row.badgeReceived = "是";
+        row.badgeReceivedAt = payload.badgeReceivedAt || row.badgeReceivedAt || "";
+      }
+      renderDashboardStats();
+      renderDashboardList();
+      setDashboardMessage(payload.message || `${id} 已標註識別證領取。`, false);
+    } catch (requestError) {
+      button.disabled = false;
+      button.textContent = "標註識別證已領";
+      setDashboardMessage(requestError.message || "登記失敗，請稍後再試。", true);
+    }
+  }
+
+  function setDashboardMessage(message, isError = false) {
+    const element = document.getElementById("dashboard-message");
+    if (!element) return;
+    element.textContent = message || "";
+    element.className = `dashboard-message${isError ? " is-error" : ""}${message ? "" : " hidden"}`;
   }
 
   function bindEventPage() {
@@ -693,6 +925,11 @@
     const requestedEvent = params.get("event");
     if (!requestedEvent || !EVENTS[requestedEvent]) {
       renderChooser(config);
+      return;
+    }
+
+    if (params.get("view") === "dashboard") {
+      renderDashboardPage(requestedEvent, EVENTS[requestedEvent].name);
       return;
     }
 
