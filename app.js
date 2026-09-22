@@ -265,10 +265,10 @@
             <label for="lookup-input">姓名或公司查詢</label>
             <div class="input-row">
               <input id="lookup-input" type="search" maxlength="80" placeholder="輸入任一文字，例如：王、銀行" autocomplete="off" />
-              <button id="lookup-button" class="small-button" type="submit" disabled>載入名單中…</button>
+              <button id="lookup-button" class="small-button" type="submit">查詢</button>
             </div>
             <div class="lookup-cache-row">
-              <small id="lookup-cache-status" class="lookup-cache-status">正在預先載入名單，完成後查詢會立即顯示。</small>
+              <small id="lookup-cache-status" class="lookup-cache-status">正在背景同步名單；同步期間仍可查詢。</small>
               <button id="lookup-refresh" type="button">更新名單</button>
             </div>
             <div id="lookup-results" class="lookup-results"></div>
@@ -656,8 +656,8 @@
     const button = document.getElementById("lookup-button");
     const status = document.getElementById("lookup-cache-status");
     if (button) {
-      button.disabled = !state.lookupReady;
-      button.textContent = state.lookupReady ? "查詢" : "載入名單中…";
+      button.disabled = false;
+      button.textContent = "查詢";
     }
     if (status) status.textContent = message;
   }
@@ -709,7 +709,7 @@
           setLookupReadyStatus("使用手機內已載入的名單快速查詢。", true);
           return state.lookupRows;
         }
-        setLookupReadyStatus("名單暫時無法載入，請重新整理頁面。", false);
+        setLookupReadyStatus("快速名單尚未完成，查詢會直接讀取最新後台資料。", false);
         return [];
       })
       .finally(() => {
@@ -877,19 +877,37 @@
     results.replaceChildren();
     if (!query) return;
 
-    if (!state.lookupReady) await prepareLookupIndex();
-    if (!state.lookupRows.length) {
-      const error = document.createElement("div");
-      error.className = "error-text";
-      error.textContent = "名單尚未載入完成，請重新整理頁面。";
-      results.appendChild(error);
-      return;
+    if (!state.lookupReady) {
+      await Promise.race([
+        prepareLookupIndex(),
+        new Promise((resolve) => window.setTimeout(resolve, 500)),
+      ]);
     }
 
     const normalized = query.toLowerCase();
-    const rows = state.lookupRows.filter((row) => {
-      return [row.name, row.company, row.title, row.id].join("\n").toLowerCase().includes(normalized);
-    }).slice(0, 30);
+    let rows;
+    if (state.lookupRows.length) {
+      rows = state.lookupRows.filter((row) => {
+        return [row.name, row.company, row.title, row.id].join("\n").toLowerCase().includes(normalized);
+      }).slice(0, 30);
+    } else {
+      const loading = document.createElement("div");
+      loading.className = "lookup-summary";
+      loading.textContent = "正在讀取最新後台資料…";
+      results.appendChild(loading);
+      try {
+        const payload = await callApi("lookup", { q: query });
+        rows = Array.isArray(payload.results) ? payload.results : [];
+      } catch (_) {
+        results.replaceChildren();
+        const error = document.createElement("div");
+        error.className = "error-text";
+        error.textContent = "暫時無法查詢，請按「更新名單」後再試一次。";
+        results.appendChild(error);
+        return;
+      }
+      results.replaceChildren();
+    }
     const elapsed = ((performance.now() - startedAt) / 1000).toFixed(2);
     const summary = document.createElement("div");
     summary.className = "lookup-summary";
