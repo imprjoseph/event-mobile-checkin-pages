@@ -6,6 +6,8 @@
   const QUEUE_STORAGE_KEY = "impr-checkin-pending-v1";
   const BATCH_SIZE = 10;
   const BATCH_DELAY_MS = 900;
+  const LOOKUP_CACHE_KEY = "impr-checkin-lookup-v1";
+  const LOOKUP_CACHE_TTL_MS = 5 * 60 * 1000;
 
   const EVENTS = {
     sig206: {
@@ -39,6 +41,9 @@
     dashboardFilter: "attended",
     dashboardQuery: "",
     selectedBadgeIds: new Set(),
+    lookupRows: [],
+    lookupReady: false,
+    lookupLoadPromise: null,
   };
 
   function escapeHtml(value) {
@@ -260,8 +265,9 @@
             <label for="lookup-input">姓名或公司查詢</label>
             <div class="input-row">
               <input id="lookup-input" type="search" maxlength="80" placeholder="輸入任一文字，例如：王、銀行" autocomplete="off" />
-              <button class="small-button" type="submit">查詢</button>
+              <button id="lookup-button" class="small-button" type="submit" disabled>載入名單中…</button>
             </div>
+            <small id="lookup-cache-status" class="lookup-cache-status">正在預先載入名單，完成後查詢會立即顯示。</small>
             <div id="lookup-results" class="lookup-results"></div>
           </form>
 
@@ -584,6 +590,7 @@
       const input = document.getElementById("manual-input");
       recordById(input.value);
     });
+    prepareLookupIndex();
     document.getElementById("scanner-button").addEventListener("click", toggleScanner);
   }
 
@@ -624,6 +631,73 @@
     } catch (_) {}
   }
 
+  function readLookupCache() {
+    try {
+      const cached = JSON.parse(window.localStorage.getItem(LOOKUP_CACHE_KEY) || "null");
+      if (!cached || !Array.isArray(cached.rows) || !cached.rows.length) return null;
+      return cached;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveLookupCache(rows) {
+    try {
+      window.localStorage.setItem(LOOKUP_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), rows }));
+    } catch (_) {}
+  }
+
+  function setLookupReadyStatus(message, ready) {
+    state.lookupReady = Boolean(ready);
+    const button = document.getElementById("lookup-button");
+    const status = document.getElementById("lookup-cache-status");
+    if (button) {
+      button.disabled = !state.lookupReady;
+      button.textContent = state.lookupReady ? "查詢" : "載入名單中…";
+    }
+    if (status) status.textContent = message;
+  }
+
+  function prepareLookupIndex(force = false) {
+    if (!force && state.lookupRows.length && state.lookupReady) {
+      setLookupReadyStatus("名單已載入，本機快速查詢已啟用。", true);
+      return Promise.resolve(state.lookupRows);
+    }
+    const cached = !force ? readLookupCache() : null;
+    if (cached) {
+      state.lookupRows = cached.rows;
+      setLookupReadyStatus("名單已載入，本機快速查詢已啟用。", true);
+      if (Date.now() - Number(cached.savedAt || 0) <= LOOKUP_CACHE_TTL_MS) {
+        return Promise.resolve(state.lookupRows);
+      }
+    } else {
+      setLookupReadyStatus("正在預先載入名單，完成後查詢會立即顯示。", false);
+    }
+    if (state.lookupLoadPromise) return state.lookupLoadPromise;
+
+    state.lookupLoadPromise = callApi("lookupIndex")
+      .then((payload) => {
+        const rows = Array.isArray(payload.results) ? payload.results : [];
+        if (!payload.success || !rows.length) throw new Error(payload.error || "名單載入失敗");
+        state.lookupRows = rows;
+        saveLookupCache(rows);
+        setLookupReadyStatus("名單已更新，本機快速查詢已啟用。", true);
+        return rows;
+      })
+      .catch(() => {
+        if (state.lookupRows.length) {
+          setLookupReadyStatus("使用手機內已載入的名單快速查詢。", true);
+          return state.lookupRows;
+        }
+        setLookupReadyStatus("名單暫時無法載入，請重新整理頁面。", false);
+        return [];
+      })
+      .finally(() => {
+        state.lookupLoadPromise = null;
+      });
+    return state.lookupLoadPromise;
+  }
+
   function scheduleQueueSync(delay = BATCH_DELAY_MS) {
     if (!state.pendingQueue.length || state.syncingQueue) return;
     window.clearTimeout(state.queueTimer);
@@ -657,6 +731,13 @@
       queuedAt: Date.now(),
     };
     state.pendingQueue.push(item);
+    const lookupRow = state.lookupRows.find((row) => row.id === id);
+    if (lookupRow) {
+      if (mode === "gift") lookupRow.giftReceived = "是";
+      else if (mode === "lunch") lookupRow.lunchReceived = "是";
+      else lookupRow.attended = "是";
+      saveLookupCache(state.lookupRows);
+    }
     state.lastQueuedClientId = item.clientId;
     savePendingQueue();
     showResult(
@@ -768,35 +849,34 @@
 
   async function lookupAttendees(event) {
     event.preventDefault();
+    const startedAt = performance.now();
     const input = document.getElementById("lookup-input");
     const results = document.getElementById("lookup-results");
     const query = input.value.trim();
     results.replaceChildren();
     if (!query) return;
 
-    const loading = document.createElement("div");
-    loading.className = "lookup-summary";
-    loading.textContent = "正在查詢…";
-    results.appendChild(loading);
-
-    try {
-      const payload = await callApi("lookup", { q: query });
-      const rows = Array.isArray(payload.results) ? payload.results : [];
-      results.replaceChildren();
-
-      const summary = document.createElement("div");
-      summary.className = "lookup-summary";
-      summary.textContent = rows.length ? `找到 ${rows.length} 筆資料` : "查無符合資料";
-      results.appendChild(summary);
-
-      rows.forEach((row) => results.appendChild(createLookupCard(row)));
-    } catch (_) {
-      results.replaceChildren();
+    if (!state.lookupReady) await prepareLookupIndex();
+    if (!state.lookupRows.length) {
       const error = document.createElement("div");
       error.className = "error-text";
-      error.textContent = "暫時無法查詢，請稍後再試一次。";
+      error.textContent = "名單尚未載入完成，請重新整理頁面。";
       results.appendChild(error);
+      return;
     }
+
+    const normalized = query.toLowerCase();
+    const rows = state.lookupRows.filter((row) => {
+      return [row.name, row.company, row.title, row.id].join("\n").toLowerCase().includes(normalized);
+    }).slice(0, 30);
+    const elapsed = ((performance.now() - startedAt) / 1000).toFixed(2);
+    const summary = document.createElement("div");
+    summary.className = "lookup-summary";
+    summary.textContent = rows.length
+      ? `找到 ${rows.length} 筆資料（${elapsed} 秒）`
+      : `查無符合資料（${elapsed} 秒）`;
+    results.appendChild(summary);
+    rows.forEach((row) => results.appendChild(createLookupCard(row)));
   }
 
   function createLookupCard(row) {
@@ -969,6 +1049,10 @@
       state.lastQueuedClientId = state.pendingQueue[state.pendingQueue.length - 1].clientId;
     }
     const params = new URLSearchParams(window.location.search);
+    const earlyEvent = params.get("event");
+    if (earlyEvent && EVENTS[earlyEvent] && params.get("view") !== "dashboard") {
+      prepareLookupIndex();
+    }
     const config = await loadConfig();
     EVENTS.sig206.name = config.eventName;
     EVENTS.forum.name = config.eventName;
