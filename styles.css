@@ -300,6 +300,8 @@ button:disabled { opacity: 0.58; cursor: wait; }
 .status-panel p { margin: 0; color: #475467; line-height: 1.6; }
 
 .lookup-cache-status { display: block; margin-top: 8px; color: #667085; line-height: 1.45; }
+.lookup-cache-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lookup-cache-row button { flex: 0 0 auto; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #475467; font-size: 12px; font-weight: 800; cursor: pointer; }
 .lookup-results { display: grid; gap: 10px; margin-top: 14px; }
 .lookup-summary { color: var(--muted); font-size: 14px; font-weight: 700; }
 .lookup-card { display: flex; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: white; }

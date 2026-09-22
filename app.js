@@ -267,7 +267,10 @@
               <input id="lookup-input" type="search" maxlength="80" placeholder="輸入任一文字，例如：王、銀行" autocomplete="off" />
               <button id="lookup-button" class="small-button" type="submit" disabled>載入名單中…</button>
             </div>
-            <small id="lookup-cache-status" class="lookup-cache-status">正在預先載入名單，完成後查詢會立即顯示。</small>
+            <div class="lookup-cache-row">
+              <small id="lookup-cache-status" class="lookup-cache-status">正在預先載入名單，完成後查詢會立即顯示。</small>
+              <button id="lookup-refresh" type="button">更新名單</button>
+            </div>
             <div id="lookup-results" class="lookup-results"></div>
           </form>
 
@@ -585,6 +588,7 @@
     });
 
     document.getElementById("lookup-form").addEventListener("submit", lookupAttendees);
+    document.getElementById("lookup-refresh").addEventListener("click", () => prepareLookupIndex(true));
     document.getElementById("manual-form").addEventListener("submit", (event) => {
       event.preventDefault();
       const input = document.getElementById("manual-input");
@@ -658,24 +662,40 @@
     if (status) status.textContent = message;
   }
 
+  function setLookupRefreshBusy(busy) {
+    const button = document.getElementById("lookup-refresh");
+    if (!button) return;
+    button.disabled = Boolean(busy);
+    button.textContent = busy ? "更新中…" : "更新名單";
+  }
+
   function prepareLookupIndex(force = false) {
     if (!force && state.lookupRows.length && state.lookupReady) {
+      if (state.lookupLoadPromise) {
+        setLookupReadyStatus("使用已載入名單，正在背景更新。", true);
+        setLookupRefreshBusy(true);
+        return state.lookupLoadPromise;
+      }
       setLookupReadyStatus("名單已載入，本機快速查詢已啟用。", true);
       return Promise.resolve(state.lookupRows);
     }
-    const cached = !force ? readLookupCache() : null;
+    const cached = readLookupCache();
     if (cached) {
-      state.lookupRows = cached.rows;
-      setLookupReadyStatus("名單已載入，本機快速查詢已啟用。", true);
-      if (Date.now() - Number(cached.savedAt || 0) <= LOOKUP_CACHE_TTL_MS) {
+      if (!state.lookupRows.length) state.lookupRows = cached.rows;
+      setLookupReadyStatus(force ? "使用已載入名單，正在背景更新。" : "名單已載入，本機快速查詢已啟用。", true);
+      if (!force && Date.now() - Number(cached.savedAt || 0) <= LOOKUP_CACHE_TTL_MS) {
         return Promise.resolve(state.lookupRows);
       }
-    } else {
+    } else if (!state.lookupRows.length) {
       setLookupReadyStatus("正在預先載入名單，完成後查詢會立即顯示。", false);
     }
-    if (state.lookupLoadPromise) return state.lookupLoadPromise;
+    if (state.lookupLoadPromise) {
+      setLookupRefreshBusy(true);
+      return state.lookupLoadPromise;
+    }
 
-    state.lookupLoadPromise = callApi("lookupIndex")
+    setLookupRefreshBusy(true);
+    state.lookupLoadPromise = callApi("lookupIndex", { refresh: force ? "1" : "0" })
       .then((payload) => {
         const rows = Array.isArray(payload.results) ? payload.results : [];
         if (!payload.success || !rows.length) throw new Error(payload.error || "名單載入失敗");
@@ -694,6 +714,7 @@
       })
       .finally(() => {
         state.lookupLoadPromise = null;
+        setLookupRefreshBusy(false);
       });
     return state.lookupLoadPromise;
   }
@@ -1051,7 +1072,7 @@
     const params = new URLSearchParams(window.location.search);
     const earlyEvent = params.get("event");
     if (earlyEvent && EVENTS[earlyEvent] && params.get("view") !== "dashboard") {
-      prepareLookupIndex();
+      prepareLookupIndex(true);
     }
     const config = await loadConfig();
     EVENTS.sig206.name = config.eventName;
